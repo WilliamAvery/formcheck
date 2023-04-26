@@ -376,76 +376,8 @@ async function selectedfeature(outputselectkey) {
   const posId = document.getElementById('pos-select').value.split(' ')[0]
   const inputfeatures = getfeatures('input-forms')
   const features = getfeatures('output-forms')
-  var query = `
-  ask {`
-    if (inputfeatures.length) {
-      query += `{
-      SELECT ?lexemeId ?inform (COUNT(?inform) as ?infeaturecount)
-      { 
-      ?lexemeId dct:language wd:${languageId} .
-      ?lexemeId wikibase:lexicalCategory wd:${posId} .
-      ?lexemeId ontolex:lexicalForm ?inform .
-      `
-      for (condition of document.getElementById("input-conditions").children) {
-    prop=condition.children[0].children[0].value.split(' ')[0]
-    if (condition.children[1].children[0].getAttribute('qidval')==='true') {
-      val=condition.children[1].children[0].value.split(' ')[0]
-      query += `?lexemeId wdt:${prop} wd:${val} . 
-    `
-    } else {
-      query += `?lexemeId wdt:${prop} <${condition.children[1].children[0].value}> . 
-    `
-    }
-  }
-      for (const feature of inputfeatures) {
-        query += `?inform wikibase:grammaticalFeature wd:${feature} . 
-        `
-      }
-      query += `
-      ?inform wikibase:grammaticalFeature ?inunwanted. 
-    }
-            GROUP BY ?lexemeId ?inform
-            HAVING (?infeaturecount=${inputfeatures.length})
-          }`
-    }
-    query += `{
-    SELECT ?lexemeId ?form (COUNT(?form) as ?featurecount)
-    { 
-    ?lexemeId dct:language wd:${languageId} .
-    ?lexemeId wikibase:lexicalCategory wd:${posId} .
-    ?lexemeId ontolex:lexicalForm ?form .
-    `
-    for (condition of document.getElementById("input-conditions").children) {
-    prop=condition.children[0].children[0].value.split(' ')[0]
-    if (condition.children[1].children[0].getAttribute('qidval')==='true') {
-      val=condition.children[1].children[0].value.split(' ')[0]
-      query += `?lexemeId wdt:${prop} wd:${val} . 
-    `
-    } else {
-      query += `?lexemeId wdt:${prop} <${condition.children[1].children[0].value}> . 
-    `
-    }
-  }
-  for (const feature of features) {
-    query += `?form wikibase:grammaticalFeature wd:${feature} . 
-    `
-  }
-  query += `
-  ?form wikibase:grammaticalFeature ?unwanted. 
-  } GROUP by ?lexemeId ?form
-  HAVING (?featurecount = ${features.length})
-  }
-}
-  `
-  
-  const sparql = queryendpoint + (encodeURI(query).replace(/#/g, '%23'))
-  const response = await fetch(sparql)
-  const answer = await response.json()
-  if (answer.boolean) {
+  if (await countforms(languageId, posId, inputfeatures, features))
     getready(languageId, posId, inputfeatures, features)
-  } else (
-    document.getElementById('formcount').innerHTML = 'No forms meet those criteria'
-  )
 }
 
 async function addcondition() {
@@ -549,7 +481,7 @@ async function countforms(languageId, posId, inputfeatures, features) {
   SELECT (COUNT(?featurecount) as ?count) WHERE {`
     if (inputfeatures.length) {
       query += `{
-      SELECT ?lexemeId ?inform (COUNT(?inform) as ?infeaturecount)
+      SELECT ?lexemeId ?inform ?input (COUNT(?inform) as ?infeaturecount)
       { 
       ?lexemeId dct:language wd:${languageId} .
       ?lexemeId wikibase:lexicalCategory wd:${posId} .
@@ -572,13 +504,14 @@ async function countforms(languageId, posId, inputfeatures, features) {
       }
       query += `
       ?inform wikibase:grammaticalFeature ?inunwanted. 
+      ?form ontolex:representation ?input .
     }
             GROUP BY ?lexemeId ?inform
             HAVING (?infeaturecount=${inputfeatures.length})
           }`
     }
     query += `{
-    SELECT ?lexemeId ?form (COUNT(?form) as ?featurecount)
+    SELECT ?lexemeId ?form ?representation (COUNT(?form) as ?featurecount)
     { 
     ?lexemeId dct:language wd:${languageId} .
     ?lexemeId wikibase:lexicalCategory wd:${posId} .
@@ -601,6 +534,7 @@ async function countforms(languageId, posId, inputfeatures, features) {
   }
   query += `
   ?form wikibase:grammaticalFeature ?unwanted. 
+  ?form ontolex:representation ?representation .
   } GROUP by ?lexemeId ?form
   HAVING (?featurecount = ${features.length})
   }
@@ -609,13 +543,17 @@ async function countforms(languageId, posId, inputfeatures, features) {
   const sparql = queryendpoint + (encodeURI(query).replace(/#/g, '%23'))
   const response = await fetch(sparql)
   const answer = await response.json()
-  const count = answer.results.bindings[0].count.value
-  document.getElementById('formcount').innerHTML = `${count} forms`
+  const count = parseInt(answer.results.bindings[0].count.value)
+  if (count) {
+    document.getElementById('formcount').innerHTML = `${count} forms`
+  } else {
+    document.getElementById('formcount').innerHTML = 'No forms meet those criteria'
+  }
   unthrob()
+  return count
 }
 
 async function getready(languageId, posId, inputfeatures, features) {
-  await countforms(languageId, posId, inputfeatures, features)
   document.getElementById('lemma-filter-input').hidden = false
   document.getElementById('limit-choice').hidden = false
   document.getElementById('offset-choice').hidden = false
@@ -684,7 +622,7 @@ async function startcheck() {
   }
   var query = `
     SELECT ?lexemeId ?form ?lemma ?representation ?featurecount ?inform ?input WHERE {
-      { SELECT  ?lexemeId ?form ?lemma ?representation (COUNT(?form) as ?featurecount){
+      { SELECT  ?lexemeId ?form ?lemma ?representation (LANG(?representation) as ?replang)  (COUNT(?form) as ?featurecount){
       ?lexemeId dct:language wd:${languageId} .
       ?lexemeId wikibase:lemma ?lemma .
       ?lexemeId wikibase:lexicalCategory wd:${posId} .
@@ -707,6 +645,7 @@ async function startcheck() {
   }
   query += `
       ?form ontolex:representation ?representation .
+      FILTER (LANG(?lemma)=LANG(?representation))
  `
   if (!inputfeatures.length && filtertext)
     query += filtertext
@@ -717,7 +656,7 @@ async function startcheck() {
 }`
 if (inputfeatures.length) {
   query += `
-{SELECT  ?lexemeId ?inform ?input (COUNT(?inform) as ?infeaturecount){
+{SELECT  ?lexemeId ?inform ?input (LANG(?input) as ?inputlang) (COUNT(?inform) as ?infeaturecount){
       ?lexemeId dct:language wd:${languageId} .
       ?lexemeId wikibase:lexicalCategory wd:${posId} .
       ?lexemeId ontolex:lexicalForm ?inform .
@@ -733,11 +672,11 @@ if (inputfeatures.length) {
   query += `
   }  GROUP by ?lexemeId ?inform ?input 
     HAVING (?infeaturecount = ${inputfeatures.length})
-}`
+} FILTER (?inputlang=?replang)`
 }
 query += `
 }
-  order by ?lemma limit ${limit} offset ${offset}`
+  order by STR(?lemma) limit ${limit} offset ${offset}`
   const sparql = queryendpoint + (encodeURI(query).replace(/#/g, '%23'))
   const answer = await (await fetch(sparql)).json()
   var successes = 0
